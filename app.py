@@ -17,7 +17,29 @@ def send_msg(text):
         requests.post(url, data={"chat_id": CHAT_ID, "text": text})
 
 # Fetch data
-data = yf.download("^NSEI", period="3mo", interval="1d")
+try:
+    data = yf.download("^NSEI", period="3mo", interval="1d", progress=False)
+except:
+    data = None
+
+# Backup: try again with different params
+if data is None or data.empty:
+    try:
+        data = yf.download("^NSEI", period="1mo", interval="1d", progress=False)
+    except:
+        data = None
+
+# Final check
+if data is None or data.empty:
+    st.warning("⚠️ Live data unavailable. Showing sample data.")
+    
+    # Dummy fallback data (so app never crashes)
+    import pandas as pd
+    data = pd.DataFrame({
+        "Close": [22000,22100,22250,22180,22300],
+    })
+    data['SMA20'] = data['Close']
+    data['SMA50'] = data['Close']
 
 # FIX: check data
 if data is None or data.empty:
