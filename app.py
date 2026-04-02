@@ -31,10 +31,12 @@ latest = data.iloc[-1]
 # Signal
 signal = "Neutral"
 
-if latest['Close'] > latest['SMA20'] > latest['SMA50']:
+if latest['Close'] > latest['SMA20']:
     signal = "Bullish"
-elif latest['Close'] < latest['SMA20'] < latest['SMA50']:
+elif latest['Close'] < latest['SMA20']:
     signal = "Bearish"
+else:
+    signal = "Neutral"
 
 # Output
 st.subheader("Signal")
