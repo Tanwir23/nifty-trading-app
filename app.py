@@ -101,7 +101,11 @@ def trade_setup(price, signal):
 nifty_df = get_data("^NSEI")
 sensex_df = get_data("^BSESN")
 
-if nifty_df is None or sensex_df is None:
+if nifty_df is None or len(nifty_df) < 20:
+    st.warning("⚠️ Using fallback data for Nifty")
+
+if sensex_df is None or len(sensex_df) < 20:
+    st.warning("⚠️ Using fallback data for Sensex")
     st.error("⚠️ Data not loading. Try refresh.")
     st.stop()
 
