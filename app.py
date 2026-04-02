@@ -6,7 +6,7 @@ import time
 
 st.set_page_config(page_title="Pro Trading Tool", layout="wide")
 
-st.title("📊 Nifty & Sensex Intraday Trading System")
+st.title("📊 Nifty & Sensex Options Trading System")
 
 # ================= TELEGRAM =================
 TOKEN = st.sidebar.text_input("Telegram Bot Token", type="password")
@@ -17,7 +17,7 @@ def send_msg(text):
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": CHAT_ID, "text": text})
 
-# ================= SMART ALERT STORAGE =================
+# ================= SMART ALERT =================
 LAST_SIGNAL_FILE = "last_signal.txt"
 
 def get_last_signal():
@@ -30,7 +30,7 @@ def save_signal(signal):
     with open(LAST_SIGNAL_FILE, "w") as f:
         f.write(signal)
 
-# ================= FETCH DATA =================
+# ================= DATA =================
 def get_data(symbol):
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=5m&range=1d"
@@ -45,8 +45,8 @@ def get_data(symbol):
 
         return df
 
-    except Exception as e:
-        # 🔥 fallback data (different for Nifty & Sensex)
+    except:
+        # fallback data
         if symbol == "^NSEI":
             prices = [
                 22000,22100,22200,22150,22250,22300,22280,22350,
@@ -89,14 +89,12 @@ def generate_signal(df):
 
     signal = "Neutral"
 
-    # Strong signals
     if latest['RSI'] > 65 and latest['MACD'] > latest['Signal']:
         signal = "STRONG BUY 🚀"
 
     elif latest['RSI'] < 35 and latest['MACD'] < latest['Signal']:
         signal = "STRONG SELL 🔻"
 
-    # Breakouts
     elif latest['Close'] > recent_high:
         signal = "BREAKOUT BUY ⚡"
 
@@ -105,17 +103,26 @@ def generate_signal(df):
 
     return signal, latest
 
-# ================= TRADE SETUP =================
-def trade_setup(price, signal):
-    risk = 30
-    reward = 60
+# ================= OPTIONS STRATEGY =================
+def option_strategy(price, signal, index_name):
+    strike = round(price / 100) * 100
 
     if "BUY" in signal:
-        return price, price + reward, price - risk
+        option = f"{index_name} {strike} CE"
+        target = price + 50
+        sl = price - 30
+
     elif "SELL" in signal:
-        return price, price - reward, price + risk
+        option = f"{index_name} {strike} PE"
+        target = price - 50
+        sl = price + 30
+
     else:
-        return price, price + 20, price - 20
+        option = "No Trade"
+        target = price
+        sl = price
+
+    return option, target, sl
 
 # ================= RUN =================
 nifty_df = get_data("^NSEI")
@@ -123,40 +130,42 @@ sensex_df = get_data("^BSESN")
 
 # NIFTY
 n_signal, n_latest = generate_signal(nifty_df)
-n_entry, n_target, n_sl = trade_setup(n_latest['Close'], n_signal)
+n_option, n_target, n_sl = option_strategy(n_latest['Close'], n_signal, "NIFTY")
 
 # SENSEX
 s_signal, s_latest = generate_signal(sensex_df)
-s_entry, s_target, s_sl = trade_setup(s_latest['Close'], s_signal)
+s_option, s_target, s_sl = option_strategy(s_latest['Close'], s_signal, "SENSEX")
 
 # ================= DISPLAY =================
-st.subheader("📈 Nifty (5-min Scalping)")
+st.subheader("📈 Nifty (Options Trade)")
 st.write(f"Price: {round(n_latest['Close'],2)}")
 st.write(f"Signal: {n_signal}")
-st.write(f"Entry: {n_entry} | Target: {n_target} | SL: {n_sl}")
+st.write(f"Trade: {n_option}")
+st.write(f"Target: {n_target} | SL: {n_sl}")
 
 st.divider()
 
-st.subheader("📊 Sensex (5-min Scalping)")
+st.subheader("📊 Sensex (Options Trade)")
 st.write(f"Price: {round(s_latest['Close'],2)}")
 st.write(f"Signal: {s_signal}")
-st.write(f"Entry: {s_entry} | Target: {s_target} | SL: {s_sl}")
+st.write(f"Trade: {s_option}")
+st.write(f"Target: {s_target} | SL: {s_sl}")
 
-# ================= TELEGRAM ALERT =================
+# ================= TELEGRAM =================
 msg = f"""
-🚨 INTRADAY TRADE ALERT 🚨
+🚨 OPTIONS TRADE ALERT 🚨
 
 NIFTY:
 {n_signal}
-Entry: {round(n_entry,2)}
-Target: {round(n_target,2)}
-SL: {round(n_sl,2)}
+Trade: {n_option}
+Target: {n_target}
+SL: {n_sl}
 
 SENSEX:
 {s_signal}
-Entry: {round(s_entry,2)}
-Target: {round(s_target,2)}
-SL: {round(s_sl,2)}
+Trade: {s_option}
+Target: {s_target}
+SL: {s_sl}
 """
 
 current_signal = n_signal + "|" + s_signal
@@ -175,4 +184,4 @@ refresh = st.sidebar.selectbox("Refresh (sec)", [30, 60, 120])
 time.sleep(refresh)
 st.rerun()
 
-st.caption("⚠️ Intraday system for learning purposes")
+st.caption("⚠️ Educational use only")
