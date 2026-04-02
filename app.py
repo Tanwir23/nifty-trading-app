@@ -1,10 +1,12 @@
 import streamlit as st
 import pandas as pd
 import requests
+import os
+import time
 
 st.set_page_config(page_title="Pro Trading Tool", layout="wide")
 
-st.title("📊 Nifty & Sensex Intraday Trading Tool")
+st.title("📊 Nifty & Sensex Intraday Trading System")
 
 # ================= TELEGRAM =================
 TOKEN = st.sidebar.text_input("Telegram Bot Token", type="password")
@@ -14,6 +16,19 @@ def send_msg(text):
     if TOKEN and CHAT_ID:
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": CHAT_ID, "text": text})
+
+# ================= SMART ALERT STORAGE =================
+LAST_SIGNAL_FILE = "last_signal.txt"
+
+def get_last_signal():
+    if os.path.exists(LAST_SIGNAL_FILE):
+        with open(LAST_SIGNAL_FILE, "r") as f:
+            return f.read()
+    return ""
+
+def save_signal(signal):
+    with open(LAST_SIGNAL_FILE, "w") as f:
+        f.write(signal)
 
 # ================= FETCH DATA =================
 def get_data(symbol):
@@ -31,33 +46,27 @@ def get_data(symbol):
         return df
 
     except:
-        # 🔥 FALLBACK DATA (so app never crashes)
+        # fallback data (safe)
         prices = [
             22000,22100,22200,22150,22250,22300,22280,22350,
             22400,22380,22450,22500,22480,22550,22600,22580,
             22650,22700,22680,22750,22800,22780,22850,22900
         ]
-        df = pd.DataFrame(prices, columns=['Close'])
-        return df
+        return pd.DataFrame(prices, columns=['Close'])
 
 # ================= INDICATORS =================
 def calculate_rsi(df, period=14):
     delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
-
+    gain = delta.clip(lower=0).rolling(period).mean()
+    loss = -delta.clip(upper=0).rolling(period).mean()
     rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-
-    return rsi
+    return 100 - (100 / (1 + rs))
 
 def calculate_macd(df):
     ema12 = df['Close'].ewm(span=12).mean()
     ema26 = df['Close'].ewm(span=26).mean()
-
     macd = ema12 - ema26
     signal = macd.ewm(span=9).mean()
-
     return macd, signal
 
 # ================= SIGNAL =================
@@ -67,47 +76,42 @@ def generate_signal(df):
 
     latest = df.iloc[-1]
 
-    signal = "Neutral"
-
-    # 🔥 Scalping Logic
-    if latest['RSI'] > 60 and latest['MACD'] > latest['Signal']:
-        signal = "BUY (Scalp)"
-
-    elif latest['RSI'] < 40 and latest['MACD'] < latest['Signal']:
-        signal = "SELL (Scalp)"
-
-    # ⚡ Breakout logic
     recent_high = df['Close'].rolling(20).max().iloc[-1]
     recent_low = df['Close'].rolling(20).min().iloc[-1]
 
-    if latest['Close'] > recent_high:
-        signal = "BREAKOUT BUY 🚀"
+    signal = "Neutral"
+
+    # Strong signals
+    if latest['RSI'] > 65 and latest['MACD'] > latest['Signal']:
+        signal = "STRONG BUY 🚀"
+
+    elif latest['RSI'] < 35 and latest['MACD'] < latest['Signal']:
+        signal = "STRONG SELL 🔻"
+
+    # Breakouts
+    elif latest['Close'] > recent_high:
+        signal = "BREAKOUT BUY ⚡"
 
     elif latest['Close'] < recent_low:
-        signal = "BREAKDOWN SELL 🔻"
+        signal = "BREAKDOWN SELL ⚡"
 
     return signal, latest
 
 # ================= TRADE SETUP =================
 def trade_setup(price, signal):
+    risk = 30
+    reward = 60
+
     if "BUY" in signal:
-        return price, price + 50, price - 30
+        return price, price + reward, price - risk
     elif "SELL" in signal:
-        return price, price - 50, price + 30
+        return price, price - reward, price + risk
     else:
         return price, price + 20, price - 20
 
 # ================= RUN =================
 nifty_df = get_data("^NSEI")
 sensex_df = get_data("^BSESN")
-
-if nifty_df is None or len(nifty_df) < 20:
-    st.warning("⚠️ Using fallback data for Nifty")
-
-if sensex_df is None or len(sensex_df) < 20:
-    st.warning("⚠️ Using fallback data for Sensex")
-    st.error("⚠️ Data not loading. Try refresh.")
-    st.stop()
 
 # NIFTY
 n_signal, n_latest = generate_signal(nifty_df)
@@ -130,25 +134,37 @@ st.write(f"Price: {round(s_latest['Close'],2)}")
 st.write(f"Signal: {s_signal}")
 st.write(f"Entry: {s_entry} | Target: {s_target} | SL: {s_sl}")
 
-# ================= TELEGRAM =================
+# ================= TELEGRAM ALERT =================
 msg = f"""
-📊 INTRADAY ALERT
+🚨 INTRADAY TRADE ALERT 🚨
 
 NIFTY:
-Signal: {n_signal}
-Entry: {n_entry}
-Target: {n_target}
-SL: {n_sl}
+{n_signal}
+Entry: {round(n_entry,2)}
+Target: {round(n_target,2)}
+SL: {round(n_sl,2)}
 
 SENSEX:
-Signal: {s_signal}
-Entry: {s_entry}
-Target: {s_target}
-SL: {s_sl}
+{s_signal}
+Entry: {round(s_entry,2)}
+Target: {round(s_target,2)}
+SL: {round(s_sl,2)}
 """
 
-if st.button("Send Alert"):
-    send_msg(msg)
-    st.success("Alert Sent!")
+current_signal = n_signal + "|" + s_signal
+last_signal = get_last_signal()
 
-st.caption("⚠️ Intraday scalping system (educational)")
+if current_signal != last_signal:
+    send_msg(msg)
+    save_signal(current_signal)
+    st.success("🚨 New Signal Sent!")
+else:
+    st.info("No new signal")
+
+# ================= AUTO REFRESH =================
+refresh = st.sidebar.selectbox("Refresh (sec)", [30, 60, 120])
+
+time.sleep(refresh)
+st.rerun()
+
+st.caption("⚠️ Intraday system for learning purposes")
