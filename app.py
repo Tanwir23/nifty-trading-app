@@ -1,39 +1,39 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import ta
 import requests
 
-st.set_page_config(page_title="Nifty Trading App", layout="wide")
+st.set_page_config(page_title="Nifty App", layout="wide")
 
-st.title("🚀 Nifty 50 Dashboard + Telegram Alerts")
+st.title("📊 Nifty 50 Trading App")
 
 # Telegram
-TELEGRAM_TOKEN = st.sidebar.text_input("Telegram Bot Token", type="password")
+TOKEN = st.sidebar.text_input("Telegram Bot Token", type="password")
 CHAT_ID = st.sidebar.text_input("Chat ID")
 
-def send_telegram(msg):
-    if TELEGRAM_TOKEN and CHAT_ID:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+def send_msg(text):
+    if TOKEN and CHAT_ID:
+        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": text})
 
-# Data
-symbol = "^NSEI"
-data = yf.download(symbol, period="6mo", interval="1d")
+# Fetch data
+data = yf.download("^NSEI", period="3mo", interval="1d")
 
-# 🔴 FIX: Prevent crash
-if data.empty:
-    st.error("⚠️ Data not loading. Try again later.")
+# FIX: check data
+if data is None or data.empty:
+    st.error("Data not loading. Try later.")
     st.stop()
 
-# Indicators
-data['SMA20'] = ta.trend.sma_indicator(data['Close'], window=20)
-data['SMA50'] = ta.trend.sma_indicator(data['Close'], window=50)
-data['RSI'] = ta.momentum.rsi(data['Close'], window=14)
+# FIX: reset index (very important)
+data = data.reset_index()
+
+# Simple Moving Averages (no ta library)
+data['SMA20'] = data['Close'].rolling(20).mean()
+data['SMA50'] = data['Close'].rolling(50).mean()
 
 latest = data.iloc[-1]
 
-# Signal
+# Signal logic (simple + stable)
 signal = "Neutral"
 
 if latest['Close'] > latest['SMA20'] > latest['SMA50']:
@@ -41,14 +41,16 @@ if latest['Close'] > latest['SMA20'] > latest['SMA50']:
 elif latest['Close'] < latest['SMA20'] < latest['SMA50']:
     signal = "Bearish"
 
-# Output
+# Show output
 st.subheader("Signal")
 st.write(signal)
 
-msg = f"Nifty Signal: {signal} | Price: {round(latest['Close'],2)}"
+price = float(latest['Close'])
 
-if st.button("Send to Telegram"):
-    send_telegram(msg)
+msg = f"Nifty: {signal} | Price: {round(price,2)}"
+
+if st.button("Send Telegram"):
+    send_msg(msg)
     st.success("Sent!")
 
 # Chart
