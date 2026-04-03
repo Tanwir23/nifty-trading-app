@@ -6,7 +6,7 @@ import time
 
 st.set_page_config(page_title="Pro Trading Tool", layout="wide")
 
-st.title("📊 Nifty & Sensex Options Trading System")
+st.title("📊 Nifty & Sensex Advanced Options Trading System")
 
 # ================= TELEGRAM =================
 TOKEN = st.sidebar.text_input("Telegram Bot Token", type="password")
@@ -46,7 +46,6 @@ def get_data(symbol):
         return df
 
     except:
-        # fallback data
         if symbol == "^NSEI":
             prices = [
                 22000,22100,22200,22150,22250,22300,22280,22350,
@@ -77,28 +76,47 @@ def calculate_macd(df):
     signal = macd.ewm(span=9).mean()
     return macd, signal
 
-# ================= SIGNAL =================
+# ================= SIGNAL (IMPROVED) =================
 def generate_signal(df):
     df['RSI'] = calculate_rsi(df)
     df['MACD'], df['Signal'] = calculate_macd(df)
+
+    df['EMA20'] = df['Close'].ewm(span=20).mean()
+    df['EMA50'] = df['Close'].ewm(span=50).mean()
 
     latest = df.iloc[-1]
 
     recent_high = df['Close'].rolling(20).max().iloc[-1]
     recent_low = df['Close'].rolling(20).min().iloc[-1]
 
-    signal = "Neutral"
+    signal = "NO TRADE"
 
-    if latest['RSI'] > 65 and latest['MACD'] > latest['Signal']:
+    uptrend = latest['EMA20'] > latest['EMA50']
+    downtrend = latest['EMA20'] < latest['EMA50']
+
+    # STRONG BUY
+    if (
+        uptrend and
+        latest['RSI'] > 60 and
+        latest['MACD'] > latest['Signal'] and
+        latest['Close'] > latest['EMA20']
+    ):
         signal = "STRONG BUY 🚀"
 
-    elif latest['RSI'] < 35 and latest['MACD'] < latest['Signal']:
+    # STRONG SELL
+    elif (
+        downtrend and
+        latest['RSI'] < 40 and
+        latest['MACD'] < latest['Signal'] and
+        latest['Close'] < latest['EMA20']
+    ):
         signal = "STRONG SELL 🔻"
 
-    elif latest['Close'] > recent_high:
+    # BREAKOUT
+    elif latest['Close'] > recent_high and latest['RSI'] > 55:
         signal = "BREAKOUT BUY ⚡"
 
-    elif latest['Close'] < recent_low:
+    elif latest['Close'] < recent_low and latest['RSI'] < 45:
         signal = "BREAKDOWN SELL ⚡"
 
     return signal, latest
@@ -184,4 +202,4 @@ refresh = st.sidebar.selectbox("Refresh (sec)", [30, 60, 120])
 time.sleep(refresh)
 st.rerun()
 
-st.caption("⚠️ Educational use only")
+st.caption("⚠️ Intraday trading system (educational use)")
