@@ -3,12 +3,15 @@ import pandas as pd
 import requests
 import os
 import time
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Pro Trading Tool", layout="wide")
 
-st.title("📊 Nifty & Sensex Advanced Options Trading System")
+st.title("📊 Advanced Options Trading System")
 
-# ================= TELEGRAM =================
+# ================= USER INPUT =================
+capital = st.sidebar.number_input("Capital (₹)", value=10000)
+
 TOKEN = st.sidebar.text_input("Telegram Bot Token", type="password")
 CHAT_ID = st.sidebar.text_input("Chat ID")
 
@@ -17,13 +20,21 @@ def send_msg(text):
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": CHAT_ID, "text": text})
 
+# ================= EXPIRY =================
+def get_next_expiry():
+    today = datetime.today()
+    days_ahead = 3 - today.weekday()  # Thursday
+    if days_ahead <= 0:
+        days_ahead += 7
+    expiry = today + timedelta(days=days_ahead)
+    return expiry.strftime("%d %b")
+
 # ================= SMART ALERT =================
 LAST_SIGNAL_FILE = "last_signal.txt"
 
 def get_last_signal():
     if os.path.exists(LAST_SIGNAL_FILE):
-        with open(LAST_SIGNAL_FILE, "r") as f:
-            return f.read()
+        return open(LAST_SIGNAL_FILE).read()
     return ""
 
 def save_signal(signal):
@@ -41,31 +52,24 @@ def get_data(symbol):
         df.dropna(inplace=True)
 
         if len(df) < 30:
-            raise Exception("Not enough data")
+            raise Exception()
 
         return df
-
     except:
         if symbol == "^NSEI":
-            prices = [
-                22000,22100,22200,22150,22250,22300,22280,22350,
-                22400,22380,22450,22500,22480,22550,22600,22580,
-                22650,22700,22680,22750,22800,22780,22850,22900
-            ]
+            prices = [22000,22100,22200,22300,22400,22500,22600,22700,22800]
+        elif symbol == "^NSEBANK":
+            prices = [48000,48200,48400,48600,48800,49000,49200,49400]
         else:
-            prices = [
-                73000,73100,73200,73150,73300,73400,73350,73500,
-                73600,73550,73700,73800,73750,73900,74000,73950,
-                74100,74200,74150,74300,74400,74350,74500,74600
-            ]
+            prices = [73000,73200,73400,73600,73800,74000,74200]
 
         return pd.DataFrame(prices, columns=['Close'])
 
 # ================= INDICATORS =================
-def calculate_rsi(df, period=14):
+def calculate_rsi(df):
     delta = df['Close'].diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = -delta.clip(upper=0).rolling(period).mean()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = -delta.clip(upper=0).rolling(14).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
@@ -76,7 +80,7 @@ def calculate_macd(df):
     signal = macd.ewm(span=9).mean()
     return macd, signal
 
-# ================= SIGNAL (IMPROVED) =================
+# ================= SIGNAL =================
 def generate_signal(df):
     df['RSI'] = calculate_rsi(df)
     df['MACD'], df['Signal'] = calculate_macd(df)
@@ -91,102 +95,85 @@ def generate_signal(df):
 
     signal = "NO TRADE"
 
-    uptrend = latest['EMA20'] > latest['EMA50']
-    downtrend = latest['EMA20'] < latest['EMA50']
-
-    # STRONG BUY
-    if (
-        uptrend and
-        latest['RSI'] > 60 and
-        latest['MACD'] > latest['Signal'] and
-        latest['Close'] > latest['EMA20']
-    ):
+    if latest['EMA20'] > latest['EMA50'] and latest['RSI'] > 60 and latest['MACD'] > latest['Signal']:
         signal = "STRONG BUY 🚀"
 
-    # STRONG SELL
-    elif (
-        downtrend and
-        latest['RSI'] < 40 and
-        latest['MACD'] < latest['Signal'] and
-        latest['Close'] < latest['EMA20']
-    ):
+    elif latest['EMA20'] < latest['EMA50'] and latest['RSI'] < 40 and latest['MACD'] < latest['Signal']:
         signal = "STRONG SELL 🔻"
 
-    # BREAKOUT
-    elif latest['Close'] > recent_high and latest['RSI'] > 55:
+    elif latest['Close'] > recent_high:
         signal = "BREAKOUT BUY ⚡"
 
-    elif latest['Close'] < recent_low and latest['RSI'] < 45:
+    elif latest['Close'] < recent_low:
         signal = "BREAKDOWN SELL ⚡"
 
     return signal, latest
 
-# ================= OPTIONS STRATEGY =================
-def option_strategy(price, signal, index_name):
+# ================= OPTIONS =================
+def option_strategy(price, signal, index, lot_size):
     strike = round(price / 100) * 100
+    expiry = get_next_expiry()
+
+    lots = max(1, capital // 5000)
+    qty = lots * lot_size
 
     if "BUY" in signal:
-        option = f"{index_name} {strike} CE"
-        target = price + 50
-        sl = price - 30
-
+        option = f"{index} {expiry} {strike} CE"
     elif "SELL" in signal:
-        option = f"{index_name} {strike} PE"
-        target = price - 50
-        sl = price + 30
-
+        option = f"{index} {expiry} {strike} PE"
     else:
         option = "No Trade"
-        target = price
-        sl = price
 
-    return option, target, sl
+    return option, qty
 
 # ================= RUN =================
 nifty_df = get_data("^NSEI")
+bank_df = get_data("^NSEBANK")
 sensex_df = get_data("^BSESN")
 
 # NIFTY
 n_signal, n_latest = generate_signal(nifty_df)
-n_option, n_target, n_sl = option_strategy(n_latest['Close'], n_signal, "NIFTY")
+n_option, n_qty = option_strategy(n_latest['Close'], n_signal, "NIFTY", 25)
+
+# BANK NIFTY
+b_signal, b_latest = generate_signal(bank_df)
+b_option, b_qty = option_strategy(b_latest['Close'], b_signal, "BANKNIFTY", 15)
 
 # SENSEX
 s_signal, s_latest = generate_signal(sensex_df)
-s_option, s_target, s_sl = option_strategy(s_latest['Close'], s_signal, "SENSEX")
+s_option, s_qty = option_strategy(s_latest['Close'], s_signal, "SENSEX", 10)
 
 # ================= DISPLAY =================
-st.subheader("📈 Nifty (Options Trade)")
-st.write(f"Price: {round(n_latest['Close'],2)}")
-st.write(f"Signal: {n_signal}")
-st.write(f"Trade: {n_option}")
-st.write(f"Target: {n_target} | SL: {n_sl}")
+st.subheader("📈 NIFTY")
+st.write(n_signal, "|", n_option, "| Qty:", n_qty)
 
-st.divider()
+st.subheader("🏦 BANK NIFTY")
+st.write(b_signal, "|", b_option, "| Qty:", b_qty)
 
-st.subheader("📊 Sensex (Options Trade)")
-st.write(f"Price: {round(s_latest['Close'],2)}")
-st.write(f"Signal: {s_signal}")
-st.write(f"Trade: {s_option}")
-st.write(f"Target: {s_target} | SL: {s_sl}")
+st.subheader("📊 SENSEX")
+st.write(s_signal, "|", s_option, "| Qty:", s_qty)
 
 # ================= TELEGRAM =================
 msg = f"""
-🚨 OPTIONS TRADE ALERT 🚨
+🚨 TRADE ALERT 🚨
 
 NIFTY:
 {n_signal}
-Trade: {n_option}
-Target: {n_target}
-SL: {n_sl}
+{n_option}
+Qty: {n_qty}
+
+BANKNIFTY:
+{b_signal}
+{b_option}
+Qty: {b_qty}
 
 SENSEX:
 {s_signal}
-Trade: {s_option}
-Target: {s_target}
-SL: {s_sl}
+{s_option}
+Qty: {s_qty}
 """
 
-current_signal = n_signal + "|" + s_signal
+current_signal = n_signal + b_signal + s_signal
 last_signal = get_last_signal()
 
 if current_signal != last_signal:
@@ -197,9 +184,7 @@ else:
     st.info("No new signal")
 
 # ================= AUTO REFRESH =================
-refresh = st.sidebar.selectbox("Refresh (sec)", [30, 60, 120])
+refresh = st.sidebar.selectbox("Refresh (sec)", [30, 60])
 
 time.sleep(refresh)
 st.rerun()
-
-st.caption("⚠️ Intraday trading system (educational use)")
