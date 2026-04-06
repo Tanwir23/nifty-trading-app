@@ -7,20 +7,19 @@ from datetime import datetime, timedelta
 from kiteconnect import KiteConnect
 
 st.set_page_config(page_title="Pro Trading Tool", layout="wide")
+st.title("📊 FULL AUTO TRADING SYSTEM (ZERODHA)")
 
-st.title("📊 Zerodha Live Trading System")
-
-# ================= USER INPUT =================
+# ================= INPUT =================
 capital = st.sidebar.number_input("Capital (₹)", value=10000)
 
-# Zerodha Login
 api_key = st.sidebar.text_input("Zerodha API Key")
 api_secret = st.sidebar.text_input("API Secret", type="password")
 request_token = st.sidebar.text_input("Request Token")
 
-# Telegram
 TOKEN = st.sidebar.text_input("Telegram Token", type="password")
 CHAT_ID = st.sidebar.text_input("Chat ID")
+
+auto_trade = st.sidebar.checkbox("Enable Auto Trading")
 
 # ================= TELEGRAM =================
 def send_msg(text):
@@ -28,9 +27,8 @@ def send_msg(text):
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": CHAT_ID, "text": text})
 
-# ================= ZERODHA CONNECT =================
+# ================= ZERODHA =================
 kite = None
-
 if api_key and api_secret and request_token:
     try:
         kite = KiteConnect(api_key=api_key)
@@ -40,14 +38,6 @@ if api_key and api_secret and request_token:
     except:
         st.error("❌ Login Failed")
 
-# ================= EXPIRY =================
-def get_expiry():
-    today = datetime.today()
-    days = 3 - today.weekday()
-    if days <= 0:
-        days += 7
-    return (today + timedelta(days=days)).strftime("%d %b")
-
 # ================= STORAGE =================
 FILE = "last_signal.txt"
 
@@ -56,6 +46,14 @@ def get_last():
 
 def save_last(s):
     open(FILE, "w").write(s)
+
+# ================= EXPIRY =================
+def get_expiry():
+    today = datetime.today()
+    days = 3 - today.weekday()
+    if days <= 0:
+        days += 7
+    return (today + timedelta(days=days)).strftime("%d%b").upper()
 
 # ================= LIVE PRICE =================
 def get_price(symbol):
@@ -71,10 +69,9 @@ def get_price(symbol):
     except:
         pass
 
-    # fallback
     return 22000 if symbol=="NIFTY" else 48000 if symbol=="BANKNIFTY" else 73000
 
-# ================= FAKE SERIES FOR INDICATORS =================
+# ================= BUILD DF =================
 def build_df(price):
     return pd.DataFrame([price + i for i in range(50)], columns=['Close'])
 
@@ -103,76 +100,86 @@ def get_signal(df):
 
     return "NO TRADE"
 
-# ================= OPTION PRICE =================
-def get_option_price(index, strike, opt_type):
+# ================= SYMBOL =================
+def build_symbol(index, strike, opt_type):
+    expiry = get_expiry()
+    return f"{index}{expiry}{strike}{opt_type}"
+
+# ================= ORDER =================
+def place_order(symbol, qty, transaction):
     try:
-        if kite:
-            symbol_map = {
-                "NIFTY": "NFO:NIFTY",
-                "BANKNIFTY": "NFO:BANKNIFTY"
-            }
-
-            tradingsymbol = f"{symbol_map[index]}{strike}{opt_type}"
-            data = kite.ltp(tradingsymbol)
-
-            return list(data.values())[0]['last_price']
-    except:
-        pass
-
-    return 0
+        if kite and symbol != "":
+            return kite.place_order(
+                variety=kite.VARIETY_REGULAR,
+                exchange=kite.EXCHANGE_NFO,
+                tradingsymbol=symbol,
+                transaction_type=transaction,
+                quantity=qty,
+                product=kite.PRODUCT_MIS,
+                order_type=kite.ORDER_TYPE_MARKET
+            )
+    except Exception as e:
+        return str(e)
 
 # ================= STRATEGY =================
-def strategy(index, lot):
+def run_strategy(index, lot):
     price = get_price(index)
     df = build_df(price)
 
     signal = get_signal(df)
-    strike = round(price / 100) * 100
+    strike = round(price/100)*100
     expiry = get_expiry()
 
-    lots = max(1, capital // 5000)
+    lots = max(1, capital//5000)
     qty = lots * lot
 
+    symbol = ""
+    option_text = ""
+
     if "BUY" in signal:
-        opt = f"{index} {expiry} {strike} CE"
-        premium = get_option_price(index, strike, "CE")
+        symbol = build_symbol(index, strike, "CE")
+        option_text = f"{index} {expiry} {strike} CE"
 
     elif "SELL" in signal:
-        opt = f"{index} {expiry} {strike} PE"
-        premium = get_option_price(index, strike, "PE")
-
-    else:
-        opt = "No Trade"
-        premium = 0
+        symbol = build_symbol(index, strike, "PE")
+        option_text = f"{index} {expiry} {strike} PE"
 
     tsl = price - 20 if "BUY" in signal else price + 20
 
-    return signal, opt, qty, premium, tsl, df
+    return signal, option_text, qty, tsl, df, symbol
 
 # ================= RUN =================
 data = {
-    "NIFTY": strategy("NIFTY", 25),
-    "BANKNIFTY": strategy("BANKNIFTY", 15),
-    "SENSEX": strategy("SENSEX", 10)
+    "NIFTY": run_strategy("NIFTY", 25),
+    "BANKNIFTY": run_strategy("BANKNIFTY", 15),
+    "SENSEX": run_strategy("SENSEX", 10)
 }
 
 # ================= DISPLAY =================
 for k,v in data.items():
     st.subheader(f"📊 {k}")
-    st.write(f"Signal: {v[0]}")
-    st.write(f"Trade: {v[1]}")
-    st.write(f"Qty: {v[2]}")
-    st.write(f"Premium: ₹{v[3]}")
-    st.write(f"Trailing SL: {round(v[4],2)}")
+    st.write("Signal:", v[0])
+    st.write("Trade:", v[1])
+    st.write("Qty:", v[2])
+    st.write("Trailing SL:", round(v[3],2))
 
-    st.line_chart(v[5]['Close'])
+    col1, col2 = st.columns(2)
+
+    if col1.button(f"BUY {k}"):
+        order = place_order(v[5], v[2], "BUY")
+        st.success(order)
+
+    if col2.button(f"SELL {k}"):
+        order = place_order(v[5], v[2], "SELL")
+        st.success(order)
+
+    st.line_chart(v[4]['Close'])
     st.divider()
 
 # ================= TELEGRAM =================
 msg = "🚨 TRADE ALERT 🚨\n\n"
-
 for k,v in data.items():
-    msg += f"{k}\n{v[0]}\n{v[1]}\nQty:{v[2]} Premium:{v[3]}\n\n"
+    msg += f"{k}\n{v[0]}\n{v[1]}\nQty:{v[2]}\n\n"
 
 cur = str(data)
 
@@ -180,7 +187,15 @@ if cur != get_last():
     send_msg(msg)
     save_last(cur)
 
-# ================= AUTO REFRESH =================
+# ================= AUTO TRADE =================
+if auto_trade and cur != get_last():
+    for k,v in data.items():
+        if "BUY" in v[0]:
+            place_order(v[5], v[2], "BUY")
+        elif "SELL" in v[0]:
+            place_order(v[5], v[2], "SELL")
+
+# ================= REFRESH =================
 r = st.sidebar.selectbox("Refresh", [30,60])
 
 time.sleep(r)
