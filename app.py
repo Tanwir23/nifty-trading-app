@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
+import requests
 import time
 from datetime import datetime, timedelta
 
@@ -27,26 +27,37 @@ def get_price(symbol):
             "SENSEX": "^BSESN"
         }
 
-        ticker = yf.Ticker(mapping[symbol])
-        data = ticker.history(period="1d", interval="1m")
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{mapping[symbol]}?interval=1m&range=1d"
+        data = requests.get(url, timeout=5).json()
 
-        if not data.empty:
-            return float(data['Close'].iloc[-1])
+        close = data['chart']['result'][0]['indicators']['quote'][0]['close']
+        price = [x for x in close if x is not None][-1]
+
+        return float(price)
 
     except:
-        pass
+        return 22000 if symbol=="NIFTY" else 48000 if symbol=="BANKNIFTY" else 73000
 
-    return 22000 if symbol=="NIFTY" else 48000 if symbol=="BANKNIFTY" else 73000
-
-# ================= BUILD DATA =================
+# ================= DATA =================
 def get_df(symbol):
-    mapping = {
-        "NIFTY": "^NSEI",
-        "BANKNIFTY": "^NSEBANK",
-        "SENSEX": "^BSESN"
-    }
-    data = yf.download(mapping[symbol], period="1d", interval="5m")
-    return data[['Close']].dropna()
+    try:
+        mapping = {
+            "NIFTY": "^NSEI",
+            "BANKNIFTY": "^NSEBANK",
+            "SENSEX": "^BSESN"
+        }
+
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{mapping[symbol]}?interval=5m&range=1d"
+        data = requests.get(url, timeout=5).json()
+
+        close = data['chart']['result'][0]['indicators']['quote'][0]['close']
+        df = pd.DataFrame(close, columns=['Close']).dropna()
+
+        return df
+
+    except:
+        base = 22000 if symbol=="NIFTY" else 48000 if symbol=="BANKNIFTY" else 73000
+        return pd.DataFrame([base+i*10 for i in range(50)], columns=['Close'])
 
 # ================= INDICATORS =================
 def indicators(df):
