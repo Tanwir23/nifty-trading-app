@@ -1,51 +1,14 @@
 import streamlit as st
 import pandas as pd
-import requests
-import os
+import yfinance as yf
 import time
 from datetime import datetime, timedelta
-from kiteconnect import KiteConnect
 
-st.set_page_config(page_title="Pro Trading Tool", layout="wide")
-st.title("📊 FULL AUTO TRADING SYSTEM (ZERODHA)")
+st.set_page_config(page_title="Simple Trading Tool", layout="wide")
+st.title("📊 Simple Live Trading System")
 
 # ================= INPUT =================
 capital = st.sidebar.number_input("Capital (₹)", value=10000)
-
-api_key = st.sidebar.text_input("Zerodha API Key")
-api_secret = st.sidebar.text_input("API Secret", type="password")
-request_token = st.sidebar.text_input("Request Token")
-
-TOKEN = st.sidebar.text_input("Telegram Token", type="password")
-CHAT_ID = st.sidebar.text_input("Chat ID")
-
-auto_trade = st.sidebar.checkbox("Enable Auto Trading")
-
-# ================= TELEGRAM =================
-def send_msg(text):
-    if TOKEN and CHAT_ID:
-        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": text})
-
-# ================= ZERODHA =================
-kite = None
-if api_key and api_secret and request_token:
-    try:
-        kite = KiteConnect(api_key=api_key)
-        data = kite.generate_session(request_token, api_secret=api_secret)
-        kite.set_access_token(data["access_token"])
-        st.success("✅ Zerodha Connected")
-    except:
-        st.error("❌ Login Failed")
-
-# ================= STORAGE =================
-FILE = "last_signal.txt"
-
-def get_last():
-    return open(FILE).read() if os.path.exists(FILE) else ""
-
-def save_last(s):
-    open(FILE, "w").write(s)
 
 # ================= EXPIRY =================
 def get_expiry():
@@ -53,27 +16,37 @@ def get_expiry():
     days = 3 - today.weekday()
     if days <= 0:
         days += 7
-    return (today + timedelta(days=days)).strftime("%d%b").upper()
+    return (today + timedelta(days=days)).strftime("%d %b")
 
-# ================= PRICE =================
+# ================= LIVE PRICE =================
 def get_price(symbol):
     try:
-        if kite:
-            mapping = {
-                "NIFTY": "NSE:NIFTY 50",
-                "BANKNIFTY": "NSE:NIFTY BANK",
-                "SENSEX": "BSE:SENSEX"
-            }
-            data = kite.ltp(mapping[symbol])
-            return list(data.values())[0]['last_price']
+        mapping = {
+            "NIFTY": "^NSEI",
+            "BANKNIFTY": "^NSEBANK",
+            "SENSEX": "^BSESN"
+        }
+
+        ticker = yf.Ticker(mapping[symbol])
+        data = ticker.history(period="1d", interval="1m")
+
+        if not data.empty:
+            return float(data['Close'].iloc[-1])
+
     except:
         pass
 
     return 22000 if symbol=="NIFTY" else 48000 if symbol=="BANKNIFTY" else 73000
 
-# ================= DF =================
-def build_df(price):
-    return pd.DataFrame([price + i for i in range(50)], columns=['Close'])
+# ================= BUILD DATA =================
+def get_df(symbol):
+    mapping = {
+        "NIFTY": "^NSEI",
+        "BANKNIFTY": "^NSEBANK",
+        "SENSEX": "^BSESN"
+    }
+    data = yf.download(mapping[symbol], period="1d", interval="5m")
+    return data[['Close']].dropna()
 
 # ================= INDICATORS =================
 def indicators(df):
@@ -100,34 +73,10 @@ def get_signal(df):
 
     return "NO TRADE"
 
-# ================= SYMBOL =================
-def build_symbol(index, strike, opt_type):
-    expiry = get_expiry()
-    return f"{index}{expiry}{strike}{opt_type}"
-
-# ================= ORDER =================
-def place_order(symbol, qty, transaction):
-    try:
-        if kite and symbol:
-            return kite.place_order(
-                variety=kite.VARIETY_REGULAR,
-                exchange=kite.EXCHANGE_NFO,
-                tradingsymbol=symbol,
-                transaction_type=transaction,
-                quantity=qty,
-                product=kite.PRODUCT_MIS,
-                order_type=kite.ORDER_TYPE_MARKET
-            )
-    except Exception as e:
-        return str(e)
-
-# ================= POSITION STORAGE =================
-positions = {}
-
 # ================= STRATEGY =================
 def run_strategy(index, lot):
     price = get_price(index)
-    df = build_df(price)
+    df = get_df(index)
 
     signal = get_signal(df)
     strike = round(price/100)*100
@@ -136,29 +85,25 @@ def run_strategy(index, lot):
     lots = max(1, capital//5000)
     qty = lots * lot
 
-    symbol = ""
-    option_text = ""
-
     if "BUY" in signal:
-        symbol = build_symbol(index, strike, "CE")
-        option_text = f"{index} {expiry} {strike} CE"
+        option = f"{index} {expiry} {strike} CE"
         entry = price
         target = price + 50
         sl = price - 30
 
     elif "SELL" in signal:
-        symbol = build_symbol(index, strike, "PE")
-        option_text = f"{index} {expiry} {strike} PE"
+        option = f"{index} {expiry} {strike} PE"
         entry = price
         target = price - 50
         sl = price + 30
 
     else:
+        option = "No Trade"
         entry = price
         target = price
         sl = price
 
-    return signal, option_text, qty, entry, target, sl, df, symbol
+    return signal, option, qty, entry, target, sl, df
 
 # ================= RUN =================
 data = {
@@ -170,82 +115,17 @@ data = {
 # ================= DISPLAY =================
 for k,v in data.items():
     st.subheader(f"📊 {k}")
+
+    st.write("Price:", round(v[3],2))
     st.write("Signal:", v[0])
     st.write("Trade:", v[1])
     st.write("Qty:", v[2])
-    st.write("Entry:", v[3], "| Target:", v[4], "| SL:", v[5])
-
-    col1, col2 = st.columns(2)
-
-    if col1.button(f"BUY {k}"):
-        order = place_order(v[7], v[2], "BUY")
-        positions[k] = {"entry": v[3], "target": v[4], "sl": v[5], "qty": v[2], "symbol": v[7], "type": "BUY"}
-        st.success(order)
-
-    if col2.button(f"SELL {k}"):
-        order = place_order(v[7], v[2], "SELL")
-        positions[k] = {"entry": v[3], "target": v[4], "sl": v[5], "qty": v[2], "symbol": v[7], "type": "SELL"}
-        st.success(order)
+    st.write("Target:", v[4], "| Stop Loss:", v[5])
 
     st.line_chart(v[6]['Close'])
     st.divider()
 
-# ================= P&L =================
-st.subheader("💰 Live Positions")
-
-for k,p in list(positions.items()):
-    current = get_price(k)
-
-    if p["type"] == "BUY":
-        pnl = (current - p["entry"]) * p["qty"]
-    else:
-        pnl = (p["entry"] - current) * p["qty"]
-
-    st.write(f"{k} | Entry: {p['entry']} | Current: {current} | P&L: ₹{round(pnl,2)}")
-
-    # AUTO EXIT
-    if p["type"] == "BUY":
-        if current >= p["target"]:
-            place_order(p["symbol"], p["qty"], "SELL")
-            st.success(f"{k} TARGET HIT 🎯")
-            del positions[k]
-
-        elif current <= p["sl"]:
-            place_order(p["symbol"], p["qty"], "SELL")
-            st.error(f"{k} STOP LOSS HIT 🛑")
-            del positions[k]
-
-    else:
-        if current <= p["target"]:
-            place_order(p["symbol"], p["qty"], "BUY")
-            st.success(f"{k} TARGET HIT 🎯")
-            del positions[k]
-
-        elif current >= p["sl"]:
-            place_order(p["symbol"], p["qty"], "BUY")
-            st.error(f"{k} STOP LOSS HIT 🛑")
-            del positions[k]
-
-# ================= TELEGRAM =================
-msg = "🚨 TRADE ALERT 🚨\n\n"
-for k,v in data.items():
-    msg += f"{k}\n{v[0]}\n{v[1]}\nQty:{v[2]}\n\n"
-
-cur = str(data)
-
-if cur != get_last():
-    send_msg(msg)
-    save_last(cur)
-
-# ================= AUTO TRADE =================
-if auto_trade and cur != get_last():
-    for k,v in data.items():
-        if "BUY" in v[0]:
-            place_order(v[7], v[2], "BUY")
-        elif "SELL" in v[0]:
-            place_order(v[7], v[2], "SELL")
-
 # ================= REFRESH =================
-r = st.sidebar.selectbox("Refresh", [30,60])
-time.sleep(r)
+refresh = st.sidebar.selectbox("Refresh (sec)", [30, 60])
+time.sleep(refresh)
 st.rerun()
