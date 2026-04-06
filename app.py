@@ -55,7 +55,7 @@ def get_expiry():
         days += 7
     return (today + timedelta(days=days)).strftime("%d%b").upper()
 
-# ================= LIVE PRICE =================
+# ================= PRICE =================
 def get_price(symbol):
     try:
         if kite:
@@ -71,7 +71,7 @@ def get_price(symbol):
 
     return 22000 if symbol=="NIFTY" else 48000 if symbol=="BANKNIFTY" else 73000
 
-# ================= BUILD DF =================
+# ================= DF =================
 def build_df(price):
     return pd.DataFrame([price + i for i in range(50)], columns=['Close'])
 
@@ -108,7 +108,7 @@ def build_symbol(index, strike, opt_type):
 # ================= ORDER =================
 def place_order(symbol, qty, transaction):
     try:
-        if kite and symbol != "":
+        if kite and symbol:
             return kite.place_order(
                 variety=kite.VARIETY_REGULAR,
                 exchange=kite.EXCHANGE_NFO,
@@ -120,6 +120,9 @@ def place_order(symbol, qty, transaction):
             )
     except Exception as e:
         return str(e)
+
+# ================= POSITION STORAGE =================
+positions = {}
 
 # ================= STRATEGY =================
 def run_strategy(index, lot):
@@ -139,14 +142,23 @@ def run_strategy(index, lot):
     if "BUY" in signal:
         symbol = build_symbol(index, strike, "CE")
         option_text = f"{index} {expiry} {strike} CE"
+        entry = price
+        target = price + 50
+        sl = price - 30
 
     elif "SELL" in signal:
         symbol = build_symbol(index, strike, "PE")
         option_text = f"{index} {expiry} {strike} PE"
+        entry = price
+        target = price - 50
+        sl = price + 30
 
-    tsl = price - 20 if "BUY" in signal else price + 20
+    else:
+        entry = price
+        target = price
+        sl = price
 
-    return signal, option_text, qty, tsl, df, symbol
+    return signal, option_text, qty, entry, target, sl, df, symbol
 
 # ================= RUN =================
 data = {
@@ -161,20 +173,58 @@ for k,v in data.items():
     st.write("Signal:", v[0])
     st.write("Trade:", v[1])
     st.write("Qty:", v[2])
-    st.write("Trailing SL:", round(v[3],2))
+    st.write("Entry:", v[3], "| Target:", v[4], "| SL:", v[5])
 
     col1, col2 = st.columns(2)
 
     if col1.button(f"BUY {k}"):
-        order = place_order(v[5], v[2], "BUY")
+        order = place_order(v[7], v[2], "BUY")
+        positions[k] = {"entry": v[3], "target": v[4], "sl": v[5], "qty": v[2], "symbol": v[7], "type": "BUY"}
         st.success(order)
 
     if col2.button(f"SELL {k}"):
-        order = place_order(v[5], v[2], "SELL")
+        order = place_order(v[7], v[2], "SELL")
+        positions[k] = {"entry": v[3], "target": v[4], "sl": v[5], "qty": v[2], "symbol": v[7], "type": "SELL"}
         st.success(order)
 
-    st.line_chart(v[4]['Close'])
+    st.line_chart(v[6]['Close'])
     st.divider()
+
+# ================= P&L =================
+st.subheader("💰 Live Positions")
+
+for k,p in list(positions.items()):
+    current = get_price(k)
+
+    if p["type"] == "BUY":
+        pnl = (current - p["entry"]) * p["qty"]
+    else:
+        pnl = (p["entry"] - current) * p["qty"]
+
+    st.write(f"{k} | Entry: {p['entry']} | Current: {current} | P&L: ₹{round(pnl,2)}")
+
+    # AUTO EXIT
+    if p["type"] == "BUY":
+        if current >= p["target"]:
+            place_order(p["symbol"], p["qty"], "SELL")
+            st.success(f"{k} TARGET HIT 🎯")
+            del positions[k]
+
+        elif current <= p["sl"]:
+            place_order(p["symbol"], p["qty"], "SELL")
+            st.error(f"{k} STOP LOSS HIT 🛑")
+            del positions[k]
+
+    else:
+        if current <= p["target"]:
+            place_order(p["symbol"], p["qty"], "BUY")
+            st.success(f"{k} TARGET HIT 🎯")
+            del positions[k]
+
+        elif current >= p["sl"]:
+            place_order(p["symbol"], p["qty"], "BUY")
+            st.error(f"{k} STOP LOSS HIT 🛑")
+            del positions[k]
 
 # ================= TELEGRAM =================
 msg = "🚨 TRADE ALERT 🚨\n\n"
@@ -191,12 +241,11 @@ if cur != get_last():
 if auto_trade and cur != get_last():
     for k,v in data.items():
         if "BUY" in v[0]:
-            place_order(v[5], v[2], "BUY")
+            place_order(v[7], v[2], "BUY")
         elif "SELL" in v[0]:
-            place_order(v[5], v[2], "SELL")
+            place_order(v[7], v[2], "SELL")
 
 # ================= REFRESH =================
 r = st.sidebar.selectbox("Refresh", [30,60])
-
 time.sleep(r)
 st.rerun()
