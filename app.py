@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
-import requests
 import time
+import random
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Trading Tool", layout="wide")
-st.title("📊 Live Trading System (Stable Version)")
+st.title("📊 Trading System (Stable Version)")
 
 # ================= INPUT =================
 capital = st.sidebar.number_input("Capital (₹)", value=10000)
@@ -18,68 +18,19 @@ def get_expiry():
         days += 7
     return (today + timedelta(days=days)).strftime("%d %b")
 
-# ================= MULTI SOURCE PRICE =================
-def get_price(symbol):
-    # Try Yahoo API
-    try:
-        mapping = {
-            "NIFTY": "^NSEI",
-            "BANKNIFTY": "^NSEBANK",
-            "SENSEX": "^BSESN"
-        }
+# ================= MANUAL BASE PRICE =================
+nifty_base = st.sidebar.number_input("NIFTY Base Price", value=22500)
+bank_base = st.sidebar.number_input("BANKNIFTY Base Price", value=49000)
+sensex_base = st.sidebar.number_input("SENSEX Base Price", value=75000)
 
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{mapping[symbol]}?interval=1m&range=1d"
-        data = requests.get(url, timeout=5).json()
-
-        close = data['chart']['result'][0]['indicators']['quote'][0]['close']
-        price = [x for x in close if x is not None][-1]
-
-        return float(price)
-    except:
-        pass
-
-    # Backup: RapidAPI (optional if you add key)
-    try:
-        url = "https://latest-stock-price.p.rapidapi.com/price"
-        headers = {
-            "X-RapidAPI-Key": "",
-            "X-RapidAPI-Host": "latest-stock-price.p.rapidapi.com"
-        }
-        res = requests.get(url, headers=headers, timeout=5).json()
-
-        for item in res:
-            if symbol == "NIFTY" and item["symbol"] == "NIFTY 50":
-                return float(item["lastPrice"])
-    except:
-        pass
-
-    # FINAL fallback (never breaks app)
-    base = 22000 if symbol=="NIFTY" else 48000 if symbol=="BANKNIFTY" else 73000
-    return base + (time.time() % 50)
+# ================= LIVE SIMULATION =================
+def get_price(base):
+    return base + random.uniform(-20, 20)
 
 # ================= DATA =================
-def get_df(symbol):
-    try:
-        mapping = {
-            "NIFTY": "^NSEI",
-            "BANKNIFTY": "^NSEBANK",
-            "SENSEX": "^BSESN"
-        }
-
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{mapping[symbol]}?interval=5m&range=1d"
-        data = requests.get(url, timeout=5).json()
-
-        close = data['chart']['result'][0]['indicators']['quote'][0]['close']
-        df = pd.DataFrame(close, columns=['Close']).dropna()
-
-        if len(df) > 20:
-            return df
-    except:
-        pass
-
-    # fallback chart data
-    base = get_price(symbol)
-    return pd.DataFrame([base + i for i in range(50)], columns=['Close'])
+def get_df(base):
+    prices = [base + random.uniform(-30, 30) for _ in range(50)]
+    return pd.DataFrame(prices, columns=['Close'])
 
 # ================= INDICATORS =================
 def indicators(df):
@@ -107,9 +58,9 @@ def get_signal(df):
     return "NO TRADE"
 
 # ================= STRATEGY =================
-def run_strategy(index, lot):
-    price = get_price(index)
-    df = get_df(index)
+def run_strategy(name, base, lot):
+    price = get_price(base)
+    df = get_df(base)
 
     signal = get_signal(df)
     strike = round(price/100)*100
@@ -119,12 +70,12 @@ def run_strategy(index, lot):
     qty = lots * lot
 
     if "BUY" in signal:
-        option = f"{index} {expiry} {strike} CE"
+        option = f"{name} {expiry} {strike} CE"
         target = price + 50
         sl = price - 30
 
     elif "SELL" in signal:
-        option = f"{index} {expiry} {strike} PE"
+        option = f"{name} {expiry} {strike} PE"
         target = price - 50
         sl = price + 30
 
@@ -137,9 +88,9 @@ def run_strategy(index, lot):
 
 # ================= RUN =================
 data = {
-    "NIFTY": run_strategy("NIFTY", 25),
-    "BANKNIFTY": run_strategy("BANKNIFTY", 15),
-    "SENSEX": run_strategy("SENSEX", 10)
+    "NIFTY": run_strategy("NIFTY", nifty_base, 25),
+    "BANKNIFTY": run_strategy("BANKNIFTY", bank_base, 15),
+    "SENSEX": run_strategy("SENSEX", sensex_base, 10)
 }
 
 # ================= DISPLAY =================
@@ -156,6 +107,6 @@ for k,v in data.items():
     st.divider()
 
 # ================= REFRESH =================
-refresh = st.sidebar.selectbox("Refresh (sec)", [30, 60])
+refresh = st.sidebar.selectbox("Refresh (sec)", [10, 30])
 time.sleep(refresh)
 st.rerun()
