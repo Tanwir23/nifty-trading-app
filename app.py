@@ -4,21 +4,41 @@ import requests
 import os
 import time
 from datetime import datetime, timedelta
+from kiteconnect import KiteConnect
 
 st.set_page_config(page_title="Pro Trading Tool", layout="wide")
 
-st.title("📊 PRO Options Trading System")
+st.title("📊 Zerodha Live Trading System")
 
-# ================= INPUT =================
+# ================= USER INPUT =================
 capital = st.sidebar.number_input("Capital (₹)", value=10000)
 
+# Zerodha Login
+api_key = st.sidebar.text_input("Zerodha API Key")
+api_secret = st.sidebar.text_input("API Secret", type="password")
+request_token = st.sidebar.text_input("Request Token")
+
+# Telegram
 TOKEN = st.sidebar.text_input("Telegram Token", type="password")
 CHAT_ID = st.sidebar.text_input("Chat ID")
 
+# ================= TELEGRAM =================
 def send_msg(text):
     if TOKEN and CHAT_ID:
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": CHAT_ID, "text": text})
+
+# ================= ZERODHA CONNECT =================
+kite = None
+
+if api_key and api_secret and request_token:
+    try:
+        kite = KiteConnect(api_key=api_key)
+        data = kite.generate_session(request_token, api_secret=api_secret)
+        kite.set_access_token(data["access_token"])
+        st.success("✅ Zerodha Connected")
+    except:
+        st.error("❌ Login Failed")
 
 # ================= EXPIRY =================
 def get_expiry():
@@ -29,7 +49,7 @@ def get_expiry():
     return (today + timedelta(days=days)).strftime("%d %b")
 
 # ================= STORAGE =================
-FILE = "last.txt"
+FILE = "last_signal.txt"
 
 def get_last():
     return open(FILE).read() if os.path.exists(FILE) else ""
@@ -37,19 +57,26 @@ def get_last():
 def save_last(s):
     open(FILE, "w").write(s)
 
-# ================= DATA =================
-def get_data(symbol):
+# ================= LIVE PRICE =================
+def get_price(symbol):
     try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=5m&range=1d"
-        r = requests.get(url, timeout=5).json()
-        c = r['chart']['result'][0]['indicators']['quote'][0]['close']
-        df = pd.DataFrame(c, columns=['Close']).dropna()
-        if len(df) < 30:
-            raise Exception()
-        return df
+        if kite:
+            mapping = {
+                "NIFTY": "NSE:NIFTY 50",
+                "BANKNIFTY": "NSE:NIFTY BANK",
+                "SENSEX": "BSE:SENSEX"
+            }
+            data = kite.ltp(mapping[symbol])
+            return list(data.values())[0]['last_price']
     except:
-        base = 22000 if symbol=="^NSEI" else 48000 if symbol=="^NSEBANK" else 73000
-        return pd.DataFrame([base+i*20 for i in range(30)], columns=['Close'])
+        pass
+
+    # fallback
+    return 22000 if symbol=="NIFTY" else 48000 if symbol=="BANKNIFTY" else 73000
+
+# ================= FAKE SERIES FOR INDICATORS =================
+def build_df(price):
+    return pd.DataFrame([price + i for i in range(50)], columns=['Close'])
 
 # ================= INDICATORS =================
 def indicators(df):
@@ -64,108 +91,97 @@ def indicators(df):
     return df
 
 # ================= SIGNAL =================
-def signal_logic(df):
+def get_signal(df):
     df = indicators(df)
     l = df.iloc[-1]
 
-    high = df['Close'].rolling(20).max().iloc[-1]
-    low = df['Close'].rolling(20).min().iloc[-1]
+    if l['EMA20'] > l['EMA50'] and l['RSI'] > 60 and l['MACD'] > l['SIG']:
+        return "STRONG BUY 🚀"
 
-    # Extra filter: volatility
-    volatility = df['Close'].rolling(10).std().iloc[-1]
+    if l['EMA20'] < l['EMA50'] and l['RSI'] < 40 and l['MACD'] < l['SIG']:
+        return "STRONG SELL 🔻"
 
-    if volatility < 10:
-        return "NO TRADE", l
+    return "NO TRADE"
 
-    if l['EMA20']>l['EMA50'] and l['RSI']>60 and l['MACD']>l['SIG']:
-        return "STRONG BUY 🚀", l
+# ================= OPTION PRICE =================
+def get_option_price(index, strike, opt_type):
+    try:
+        if kite:
+            symbol_map = {
+                "NIFTY": "NFO:NIFTY",
+                "BANKNIFTY": "NFO:BANKNIFTY"
+            }
 
-    if l['EMA20']<l['EMA50'] and l['RSI']<40 and l['MACD']<l['SIG']:
-        return "STRONG SELL 🔻", l
+            tradingsymbol = f"{symbol_map[index]}{strike}{opt_type}"
+            data = kite.ltp(tradingsymbol)
 
-    if l['Close']>high:
-        return "BREAKOUT BUY ⚡", l
+            return list(data.values())[0]['last_price']
+    except:
+        pass
 
-    if l['Close']<low:
-        return "BREAKDOWN SELL ⚡", l
-
-    return "NO TRADE", l
-
-# ================= OPTION PREMIUM =================
-def option_premium(price):
-    # simple approximation (ATM)
-    return round(price * 0.005, 2)
-
-# ================= TRAILING SL =================
-def trailing_sl(entry, current, direction):
-    move = abs(current - entry)
-    if move > 30:
-        if direction == "BUY":
-            return entry + move*0.5
-        else:
-            return entry - move*0.5
-    return entry - 20 if direction=="BUY" else entry + 20
+    return 0
 
 # ================= STRATEGY =================
-def strategy(price, signal, index, lot):
-    strike = round(price/100)*100
-    expiry = get_expiry()
-    lots = max(1, capital//5000)
-    qty = lots * lot
+def strategy(index, lot):
+    price = get_price(index)
+    df = build_df(price)
 
-    premium = option_premium(price)
+    signal = get_signal(df)
+    strike = round(price / 100) * 100
+    expiry = get_expiry()
+
+    lots = max(1, capital // 5000)
+    qty = lots * lot
 
     if "BUY" in signal:
         opt = f"{index} {expiry} {strike} CE"
-        tsl = trailing_sl(price, price+40, "BUY")
+        premium = get_option_price(index, strike, "CE")
 
     elif "SELL" in signal:
         opt = f"{index} {expiry} {strike} PE"
-        tsl = trailing_sl(price, price-40, "SELL")
+        premium = get_option_price(index, strike, "PE")
 
     else:
         opt = "No Trade"
-        tsl = price
+        premium = 0
 
-    return opt, qty, premium, tsl
+    tsl = price - 20 if "BUY" in signal else price + 20
+
+    return signal, opt, qty, premium, tsl, df
 
 # ================= RUN =================
-symbols = {
-    "NIFTY": ("^NSEI", 25),
-    "BANKNIFTY": ("^NSEBANK", 15),
-    "SENSEX": ("^BSESN", 10)
+data = {
+    "NIFTY": strategy("NIFTY", 25),
+    "BANKNIFTY": strategy("BANKNIFTY", 15),
+    "SENSEX": strategy("SENSEX", 10)
 }
 
-results = {}
-
-for name,(sym,lot) in symbols.items():
-    df = get_data(sym)
-    sig, last = signal_logic(df)
-    opt, qty, prem, tsl = strategy(last['Close'], sig, name, lot)
-
-    results[name] = (sig, opt, qty, prem, tsl)
-
 # ================= DISPLAY =================
-for k,v in results.items():
+for k,v in data.items():
     st.subheader(f"📊 {k}")
     st.write(f"Signal: {v[0]}")
     st.write(f"Trade: {v[1]}")
     st.write(f"Qty: {v[2]}")
-    st.write(f"Est Premium: ₹{v[3]}")
+    st.write(f"Premium: ₹{v[3]}")
     st.write(f"Trailing SL: {round(v[4],2)}")
+
+    st.line_chart(v[5]['Close'])
     st.divider()
 
 # ================= TELEGRAM =================
 msg = "🚨 TRADE ALERT 🚨\n\n"
-for k,v in results.items():
-    msg += f"{k}\n{v[0]}\n{v[1]}\nQty:{v[2]} | Premium:{v[3]}\n\n"
 
-cur = str(results)
+for k,v in data.items():
+    msg += f"{k}\n{v[0]}\n{v[1]}\nQty:{v[2]} Premium:{v[3]}\n\n"
+
+cur = str(data)
+
 if cur != get_last():
     send_msg(msg)
     save_last(cur)
 
 # ================= AUTO REFRESH =================
 r = st.sidebar.selectbox("Refresh", [30,60])
+
 time.sleep(r)
 st.rerun()
